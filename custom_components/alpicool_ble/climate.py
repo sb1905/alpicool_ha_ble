@@ -53,6 +53,10 @@ class AlpicoolClimateZone(AlpicoolEntity, ClimateEntity):
     """Representation of an Alpicool refrigerator zone."""
 
     _attr_hvac_modes = [HVACMode.COOL, HVACMode.OFF]
+    # A fridge that is on is not "cooling a room". The state translations of
+    # this key word the HVAC mode "cool" as "On". The entity name is still
+    # set in __init__, so the key does not rename anything.
+    _attr_translation_key = "fridge"
     _attr_target_temperature_step = 1.0
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE

@@ -51,3 +51,18 @@ def test_non_temperature_numbers_keep_their_unit() -> None:
 def test_value_is_read_from_status() -> None:
     """The entity reports what the fridge sent."""
     assert make_number("left_ret_diff", left_ret_diff=3).native_value == 3
+
+
+def test_numbers_have_short_names_and_telling_icons() -> None:
+    """Longer names were cut off next to the slider on a phone."""
+    hysteresis = make_number("left_ret_diff")
+    delay = make_number("start_delay")
+
+    assert hysteresis.name == "Hysteresis"
+    assert hysteresis.icon == "mdi:thermometer-lines"
+    assert delay.name == "Start Delay"
+    assert delay.icon == "mdi:timer-outline"
+    assert max(len(hysteresis.name), len(delay.name)) <= 12
+    # The ids stay, so existing entities are renamed, not replaced.
+    assert hysteresis.unique_id == f"{ADDRESS}_left_ret_diff"
+    assert delay.unique_id == f"{ADDRESS}_start_delay"

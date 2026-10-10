@@ -35,6 +35,7 @@ class AlpicoolBatterySaverSelect(AlpicoolEntity, SelectEntity):
     """Representation of the Alpicool Battery Saver select entity."""
 
     _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:car-battery"
     _attr_options = BATTERY_SAVER_OPTIONS
 
     def __init__(self, entry: ConfigEntry, api: FridgeApi) -> None:

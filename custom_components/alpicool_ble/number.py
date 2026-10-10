@@ -10,9 +10,12 @@ from .api import FridgeApi
 from .const import DOMAIN
 from .entity import AlpicoolEntity
 
+# Names stay short on purpose: next to a slider, a phone has room for about
+# a dozen characters before the name is cut off. The icons carry the rest.
 NUMBERS = {
     "left_ret_diff": {
         "name": "Hysteresis",
+        "icon": "mdi:thermometer-lines",
         "min": 1,
         "max": 10,
         "step": 1,
@@ -22,6 +25,7 @@ NUMBERS = {
     },
     "start_delay": {
         "name": "Start Delay",
+        "icon": "mdi:timer-outline",
         "min": 0,
         "max": 10,
         "step": 1,
@@ -61,6 +65,7 @@ class AlpicoolNumber(AlpicoolEntity, NumberEntity):
 
         self._attr_unique_id = f"{self._address}_{self._number_key}"
         self._attr_name = self._number_def["name"]
+        self._attr_icon = self._number_def.get("icon")
         self._attr_native_min_value = self._number_def["min"]
         self._attr_native_max_value = self._number_def["max"]
         self._attr_native_step = self._number_def["step"]

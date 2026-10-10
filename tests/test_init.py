@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -265,18 +267,109 @@ async def test_locking_refreshes_immediately_instead_of_waiting_for_a_poll(
     """The lock switch (and number/select entities on the same code path)
     must not show the pre-write value until the next 30s poll."""
     await setup_entry(hass, fake_fridge)
-    assert hass.states.get("switch.fridge_lock").state == "off"
+    assert hass.states.get("switch.fridge_panel_lock").state == "off"
 
     await hass.services.async_call(
         "switch",
         "turn_on",
-        {"entity_id": "switch.fridge_lock"},
+        {"entity_id": "switch.fridge_panel_lock"},
         blocking=True,
     )
     await hass.async_block_till_done()
 
     assert fake_fridge.state[0] == 1
-    assert hass.states.get("switch.fridge_lock").state == "on"
+    assert hass.states.get("switch.fridge_panel_lock").state == "on"
+
+
+async def test_power_switch_turns_the_fridge_off_and_on(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """The power switch and the climate entity show the same thing."""
+    await setup_entry(hass, fake_fridge)
+    assert hass.states.get("switch.fridge_power").state == "on"
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": "switch.fridge_power"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fake_fridge.state[1] == 0
+    assert hass.states.get("switch.fridge_power").state == "off"
+    assert hass.states.get("climate.fridge").state == "off"
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": "switch.fridge_power"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fake_fridge.state[1] == 1
+    assert hass.states.get("switch.fridge_power").state == "on"
+    assert hass.states.get("climate.fridge").state == "cool"
+
+
+async def test_eco_switch_flips_between_max_and_eco(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """One press changes the run mode, and the climate preset follows."""
+    await setup_entry(hass, fake_fridge)
+    state = hass.states.get("switch.fridge_eco")
+    assert state.state == "off"
+    assert state.attributes["friendly_name"] == "Fridge Eco"
+    assert hass.states.get("climate.fridge").attributes["preset_mode"] == "Max"
+
+    await hass.services.async_call(
+        "switch", "toggle", {"entity_id": "switch.fridge_eco"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fake_fridge.state[2] == 1
+    assert hass.states.get("switch.fridge_eco").state == "on"
+    assert hass.states.get("climate.fridge").attributes["preset_mode"] == "Eco"
+
+    await hass.services.async_call(
+        "switch", "toggle", {"entity_id": "switch.fridge_eco"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fake_fridge.state[2] == 0
+    assert hass.states.get("switch.fridge_eco").state == "off"
+
+
+async def test_battery_saver_is_set_with_the_select_alone(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """There is one control for the level, and it reaches the fridge."""
+    await setup_entry(hass, fake_fridge)
+    assert hass.states.get("select.fridge_battery_saver").state == "High"
+    assert hass.states.get("switch.fridge_battery_saver_high") is None
+
+    await hass.services.async_call(
+        "select",
+        "select_next",
+        {"entity_id": "select.fridge_battery_saver", "cycle": True},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # High is the last option, so "next" wraps around to Low.
+    assert fake_fridge.state[3] == 0
+    assert hass.states.get("select.fridge_battery_saver").state == "Low"
+
+
+async def test_a_running_fridge_is_worded_on_not_cool(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """The state itself stays "cool"; only the wording shown to people changes."""
+    await setup_entry(hass, fake_fridge)
+    assert hass.states.get("climate.fridge").state == "cool"
+
+    translations = await async_get_translations(hass, "en", "entity", {DOMAIN})
+
+    prefix = f"component.{DOMAIN}.entity.climate.fridge.state"
+    assert translations[f"{prefix}.cool"] == "On"
+    assert translations[f"{prefix}.off"] == "Off"
+    entry = er.async_get(hass).async_get("climate.fridge")
+    assert entry.translation_key == "fridge"
 
 
 async def test_setup_registers_an_advertisement_callback(

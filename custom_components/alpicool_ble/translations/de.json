@@ -45,5 +45,15 @@
         }
       }
     }
+  },
+  "entity": {
+    "climate": {
+      "fridge": {
+        "state": {
+          "cool": "An",
+          "off": "Aus"
+        }
+      }
+    }
   }
 }
