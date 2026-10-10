@@ -4,7 +4,26 @@ This is a Home Assistant Custom Component to control Alpicool, BrassMonkey, Ocea
 
 This integration creates multiple entities in Home Assistant, allowing you to monitor and control all known aspects of your fridge.
 
-This component was inspired by the prior work done by klightspeed's [BrassMonkeyFridgeMonitor](https://github.com/klightspeed/BrassMonkeyFridgeMonitor).
+## About this fork
+
+This is [sb1905](https://github.com/sb1905)'s fork of [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble). On top of the original it adds:
+
+* A fix for single-zone fridges that report an empty second zone (Alpicool CX, advertised as `AK1-…`). Without it only the target temperature can be set, while power, mode and lock are ignored.
+* A **Power** switch and a one-press **Eco** switch.
+* A **compressor indicator**: the thermostat shows `Cooling` or `Idle`, and there is a `Compressor` sensor. The fridge does not report this, so it is estimated from the dip in the supply voltage while the compressor runs.
+* Plainer wording: a running fridge shows as `On` instead of `Cool`, and the lock is called what it is, a panel lock.
+
+Versions are numbered by date, for example `2026.10.0`, so they cannot be confused with the original's `3.x` numbers.
+
+### Credits
+
+Nearly all of the code is the work of others:
+
+* [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble), the integration this fork is based on.
+* [Bascht74](https://github.com/Bascht74), whose contributions to that project include MAENTUM support, the documentation and tools, and a large part of the tests.
+* klightspeed's [BrassMonkeyFridgeMonitor](https://github.com/klightspeed/BrassMonkeyFridgeMonitor), whose protocol notes the integration builds on.
+
+The additions in this fork were built with support from [Claude](https://claude.ai), Anthropic's AI model.
 
 ## Features & Supported Entities
 
@@ -13,15 +32,32 @@ This component was inspired by the prior work done by klightspeed's [BrassMonkey
     * Set the target temperature (in 1°C increments).
     * Switch between `Max` and `Eco` preset modes.
     * Display the current temperature.
+* **Binary sensor:** `Compressor`, on while the compressor is estimated to be running. See [Compressor indicator](#compressor-indicator).
 * **Sensor:** Separate `sensor` entities for diagnostic data:
     * Battery charge percentage.
     * Battery voltage.
-* **Switch:** A `switch` entity to enable or disable the fridge's control panel lock.
+* **Switch:** `switch` entities for:
+    * **Power:** switches the fridge on and off with one press.
+    * **Eco:** on is `Eco`, off is `Max`. One press switches between them.
+    * **Panel Lock:** locks the buttons on the fridge's own control panel.
 * **Number:** `number` entities to configure advanced settings directly from the UI:
     * Compressor start delay (in minutes).
     * Temperature hysteresis (return difference).
 * **Select:** `select` entities to configure advanced settings directly from the UI:
-    * Battery saver
+    * Battery saver (`Low`, `Medium`, `High`). On a dashboard, a tile card with the action `select.select_next` turns it into a single button that steps to the next level.
+
+## Compressor indicator
+
+These fridges do not report whether the compressor is running. What they do report is the supply voltage, and a running compressor pulls it down a little: on an Alpicool CX on its mains adapter from 14.3 V to 14.0 V, in steps of 0.1 V.
+
+The integration remembers the voltage seen while idle and treats a reading at least 0.2 V below it as "running". The result is shown as `Cooling` / `Idle` on the thermostat and as the `Compressor` sensor, whose attributes `idle_voltage` and `voltage_drop` show what the estimate rests on.
+
+Things to know:
+
+* It is an estimate and it lags. The voltage moves in steps and the fridge is read every 30 seconds, so expect a delay of a minute or so in both directions.
+* The idle voltage is remembered across a restart of Home Assistant for up to an hour. Without a recent one, a start in the middle of a run shows `Idle` until that run has ended.
+* It was tuned on a mains adapter. On a car battery the voltage also moves with the engine and the state of charge, so it is less reliable there.
+* A fridge that is switched off, or already colder than its target, always counts as idle.
 
 ## Dual-Zone Support
 This integration supports !!!untested!!! **both single and dual-zone fridges**. 
@@ -54,9 +90,9 @@ A guide (probe script, research notes, HACS vs. ESPHome comparison) is in [docs/
 Easiest install is via [HACS](https://hacs.xyz/):
 
 ### Method 1: HACS (Recommended)
-1.  [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gruni22&repository=alpicool_ha_ble&category=integration)
-4.  Search for "Alpicool BLE" and click "Install".
-5.  Restart Home Assistant.
+1.  [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sb1905&repository=alpicool_ha_ble&category=integration)
+2.  Click "Download" at the bottom right. In HACS this fork is listed as "Alpicool BLE (sb1905)".
+3.  Restart Home Assistant.
 
 ### Method 2: Manual Installation
 1.  Download the latest release from this repository.
