@@ -13,6 +13,7 @@ from .const import CONF_BIND_ON_START, DEFAULT_BIND_ON_START, DOMAIN
 from .entity import get_option
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.CLIMATE,
     Platform.NUMBER,
     Platform.SELECT,

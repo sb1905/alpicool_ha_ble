@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 import logging
+import time
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
@@ -13,6 +14,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import BluetoothCallbackMatcher
 from homeassistant.core import HomeAssistant, callback
 
+from .compressor import CompressorEstimator
 from .const import (
     DEFAULT_MAX_WRITE_SIZE,
     FRIDGE_NOTIFY_UUID,
@@ -99,6 +101,9 @@ class FridgeApi:
         self._notification_buffer = bytearray()
         self.is_available: bool = True
         self._last_successful_update_time: float = 0.0
+        # The fridge does not say whether its compressor runs; this works it
+        # out from the dip in the supply voltage.
+        self.compressor = CompressorEstimator()
 
     @property
     def is_connected(self) -> bool:
@@ -257,11 +262,30 @@ class FridgeApi:
                 }
                 self.status.update(extra_unknown_status)
 
+            self._update_compressor()
             _LOGGER.debug("Decoded status: %s", self.status)
         except IndexError as e:
             _LOGGER.debug(
                 "Failed to decode status payload (length %s): %s", len(payload), e
             )
+
+    def _update_compressor(self) -> None:
+        """Feed the latest voltage reading to the compressor estimator."""
+        status = self.status
+        zones = ["left"]
+        if has_right_zone(status):
+            zones.append("right")
+        # Colder than asked for in every zone: the compressor has no reason
+        # to run, whatever the voltage looks like.
+        satisfied = all(
+            status[f"{zone}_current"] < status[f"{zone}_target"] for zone in zones
+        )
+        self.compressor.update(
+            time.monotonic(),
+            status["bat_vol_int"] * 10 + status["bat_vol_dec"],
+            powered_on=bool(status["powered_on"]),
+            satisfied=satisfied,
+        )
 
     def _notification_handler(self, sender, data: bytearray):
         """Handle notifications, reassembling fragmented packets before parsing."""
@@ -598,6 +622,7 @@ class FridgeApi:
                     )
                     self.is_available = False
                     self.status.clear()
+                    self.compressor.reset()
                 update_callback()
 
                 # --- Sleep ---

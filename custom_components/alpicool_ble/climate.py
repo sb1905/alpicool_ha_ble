@@ -4,7 +4,11 @@ import logging
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
+from homeassistant.components.climate.const import (
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -154,6 +158,19 @@ class AlpicoolClimateZone(AlpicoolEntity, ClimateEntity):
     def hvac_mode(self) -> HVACMode | None:
         """Return hvac operation."""
         return HVACMode.COOL if self.api.status.get("powered_on") else HVACMode.OFF
+
+    @property
+    def hvac_action(self) -> HVACAction:
+        """Return whether the compressor is working right now.
+
+        The fridge does not report this. It is estimated from the dip in the
+        supply voltage, see compressor.py.
+        """
+        if not self.api.status.get("powered_on"):
+            return HVACAction.OFF
+        if self.api.compressor.is_running:
+            return HVACAction.COOLING
+        return HVACAction.IDLE
 
     @property
     def current_temperature(self) -> float | None:

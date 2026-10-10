@@ -1,15 +1,21 @@
 """Setup tests driving the real protocol code against a simulated fridge."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.translation import async_get_translations
+from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    mock_restore_cache,
+)
 
 from custom_components.alpicool_ble import api as api_module
 from custom_components.alpicool_ble.const import (
@@ -370,6 +376,104 @@ async def test_a_running_fridge_is_worded_on_not_cool(
     assert translations[f"{prefix}.off"] == "Off"
     entry = er.async_get(hass).async_get("climate.fridge")
     assert entry.translation_key == "fridge"
+
+
+async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Read the fridge once more and let the entities pick it up."""
+    await hass.data[DOMAIN][entry.entry_id].update_status()
+    async_dispatcher_send(hass, f"{DOMAIN}_{ADDRESS}_update")
+    await hass.async_block_till_done()
+
+
+async def test_compressor_follows_the_voltage_dip(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """A dip in the supply voltage shows as a running compressor everywhere."""
+    fake_fridge.state[16], fake_fridge.state[17] = 14, 3
+    entry = await setup_entry(hass, fake_fridge)
+
+    assert hass.states.get("binary_sensor.fridge_compressor").state == "off"
+    assert hass.states.get("climate.fridge").attributes["hvac_action"] == "idle"
+
+    # The compressor starts: 14.3 V sinks to 14.1 V.
+    fake_fridge.state[17] = 1
+    await _poll(hass, entry)
+
+    compressor = hass.states.get("binary_sensor.fridge_compressor")
+    assert compressor.state == "on"
+    assert compressor.attributes["idle_voltage"] == 14.3
+    assert compressor.attributes["voltage_drop"] == 0.2
+    assert hass.states.get("climate.fridge").attributes["hvac_action"] == "cooling"
+
+    # It stops and the voltage comes back.
+    fake_fridge.state[17] = 3
+    await _poll(hass, entry)
+
+    assert hass.states.get("binary_sensor.fridge_compressor").state == "off"
+    assert hass.states.get("climate.fridge").attributes["hvac_action"] == "idle"
+
+
+async def test_a_restart_in_mid_run_still_shows_the_run(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """The idle voltage from before the restart is used again."""
+    mock_restore_cache(
+        hass,
+        [State("binary_sensor.fridge_compressor", "on", {"idle_voltage": 14.3})],
+    )
+    # The compressor is running while Home Assistant starts: 14.1 V.
+    fake_fridge.state[16], fake_fridge.state[17] = 14, 1
+    entry = await setup_entry(hass, fake_fridge)
+
+    compressor = hass.states.get("binary_sensor.fridge_compressor")
+    assert compressor.state == "on"
+    assert compressor.attributes["idle_voltage"] == 14.3
+
+    await _poll(hass, entry)
+    assert hass.states.get("climate.fridge").attributes["hvac_action"] == "cooling"
+
+
+async def test_an_old_idle_voltage_is_not_restored(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """Hours later the fridge may be on another supply, so start from scratch."""
+    old = dt_util.utcnow() - timedelta(hours=5)
+    mock_restore_cache(
+        hass,
+        [
+            State(
+                "binary_sensor.fridge_compressor",
+                "off",
+                {"idle_voltage": 14.3},
+                last_updated=old,
+            )
+        ],
+    )
+    fake_fridge.state[16], fake_fridge.state[17] = 14, 1
+    await setup_entry(hass, fake_fridge)
+
+    compressor = hass.states.get("binary_sensor.fridge_compressor")
+    assert compressor.state == "off"
+    assert compressor.attributes["idle_voltage"] == 14.1
+
+
+async def test_a_fridge_that_is_off_is_not_cooling(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """Off wins over a low voltage reading."""
+    fake_fridge.state[16], fake_fridge.state[17] = 14, 3
+    entry = await setup_entry(hass, fake_fridge)
+    fake_fridge.state[17] = 0
+    await _poll(hass, entry)
+    assert hass.states.get("binary_sensor.fridge_compressor").state == "on"
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": "switch.fridge_power"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.fridge_compressor").state == "off"
+    assert hass.states.get("climate.fridge").attributes["hvac_action"] == "off"
 
 
 async def test_setup_registers_an_advertisement_callback(
