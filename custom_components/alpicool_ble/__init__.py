@@ -4,8 +4,9 @@ from bleak.exc import BleakError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .api import FridgeApi
@@ -20,6 +21,36 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+# Entities that builds of this fork from before 2026.10.0 created and that no
+# longer exist, as (platform, unique id suffix): three battery saver switches
+# that duplicated the Battery Saver select, and five sensors for undecoded
+# status values that turned out to tell nothing.
+RETIRED_ENTITIES: list[tuple[Platform, str]] = [
+    (Platform.SWITCH, "battery_saver_low"),
+    (Platform.SWITCH, "battery_saver_medium"),
+    (Platform.SWITCH, "battery_saver_high"),
+    (Platform.SENSOR, "raw_status_19"),
+    (Platform.SENSOR, "raw_status_20"),
+    (Platform.SENSOR, "raw_status_27"),
+    (Platform.SENSOR, "raw_status_28"),
+    (Platform.SENSOR, "raw_status_29"),
+]
+
+
+@callback
+def _async_remove_retired_entities(hass: HomeAssistant, address: str) -> None:
+    """Delete registry entries of entities this integration no longer provides.
+
+    Without this they would linger as "no longer provided by the integration".
+    """
+    registry = er.async_get(hass)
+    for platform, suffix in RETIRED_ENTITIES:
+        entity_id = registry.async_get_entity_id(
+            platform, DOMAIN, f"{address}_{suffix}"
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -57,6 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     api.set_initial_timestamp()
 
+    _async_remove_retired_entities(hass, address)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_create_background_task(

@@ -362,6 +362,28 @@ async def test_battery_saver_is_set_with_the_select_alone(
     assert hass.states.get("select.fridge_battery_saver").state == "Low"
 
 
+async def test_retired_entities_are_removed(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """Entities an earlier build created do not linger as dead entities."""
+    registry = er.async_get(hass)
+    retired = [("switch", f"battery_saver_{level}") for level in ("low", "high")]
+    retired += [("sensor", f"raw_status_{position}") for position in (19, 28)]
+    for platform, suffix in retired:
+        registry.async_get_or_create(platform, DOMAIN, f"{ADDRESS}_{suffix}")
+    kept = registry.async_get_or_create("switch", DOMAIN, f"{ADDRESS}_lock")
+
+    await setup_entry(hass, fake_fridge)
+
+    for platform, suffix in retired:
+        assert (
+            registry.async_get_entity_id(platform, DOMAIN, f"{ADDRESS}_{suffix}")
+            is None
+        )
+    # An entity that still exists keeps its registry entry and its entity id.
+    assert registry.async_get(kept.entity_id) is not None
+
+
 async def test_a_running_fridge_is_worded_on_not_cool(
     hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
 ) -> None:
