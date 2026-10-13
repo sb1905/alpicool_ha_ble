@@ -23,5 +23,5 @@
     "bleak",
     "bleak-retry-connector>=3.5.0"
   ],
-  "version": "2026.10.0"
+  "version": "2026.10.1"
 }
