@@ -50,7 +50,7 @@ The additions in this fork were built with support from [Claude](https://claude.
 
 These fridges do not report whether the compressor is running. What they do report is the supply voltage, and a running compressor pulls it down a little: on an Alpicool CX on its mains adapter from 14.3 V to 14.0 V, in steps of 0.1 V.
 
-The integration remembers the voltage seen while idle and treats a reading at least 0.2 V below it as "running". The result is shown as `Cooling` / `Idle` on the thermostat and as the `Compressor` sensor, whose attributes `idle_voltage` and `voltage_drop` show what the estimate rests on.
+The idle level is not fixed: the same adapter has been seen idling at 14.1 V for hours. So the integration takes the highest voltage of the last 45 minutes as the idle voltage and treats a reading at least 0.2 V below it as "running". While the temperature is falling, 0.1 V below is enough, and the old idle voltage is kept for as long as the fridge keeps cooling down. A fridge that gets warmer during a "run" has its compressor off, so the voltage at that moment becomes the idle voltage. The result is shown as `Cooling` / `Idle` on the thermostat and as the `Compressor` sensor, whose attributes `idle_voltage` and `voltage_drop` show what the estimate rests on.
 
 Things to know:
 

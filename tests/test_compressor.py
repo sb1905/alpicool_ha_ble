@@ -3,7 +3,7 @@
 import pytest
 
 from custom_components.alpicool_ble.compressor import (
-    IDLE_SETTLE_SECONDS,
+    BASELINE_SECONDS,
     KNOWN_IDLE_SETTLE_SECONDS,
     CompressorEstimator,
 )
@@ -19,11 +19,16 @@ def feed(
     start: float = 0,
     powered_on: bool = True,
     satisfied: bool = False,
+    temperatures: list[int] | None = None,
 ) -> list[bool]:
     """Feed readings 30 s apart and return the estimate after each one."""
     return [
         estimator.update(
-            start + index * STEP, voltage, powered_on=powered_on, satisfied=satisfied
+            start + index * STEP,
+            voltage,
+            powered_on=powered_on,
+            satisfied=satisfied,
+            temperatures=() if temperatures is None else (temperatures[index],),
         )
         for index, voltage in enumerate(voltages)
     ]
@@ -60,9 +65,13 @@ def test_one_tenth_of_noise_is_not_the_compressor() -> None:
 def test_a_long_run_stays_running() -> None:
     """Pulling down from room temperature takes hours; the reference must hold."""
     estimator = CompressorEstimator()
-    feed(estimator, [143, 143, 141])
+    feed(estimator, [143, 143, 141], temperatures=[25, 25, 25])
 
-    three_hours = feed(estimator, [140] * 360, start=3 * STEP)
+    # One degree colder every five minutes, for three hours.
+    temperatures = [24 - index // 10 for index in range(360)]
+    three_hours = feed(
+        estimator, [140] * 360, start=3 * STEP, temperatures=temperatures
+    )
 
     assert all(three_hours)
     assert estimator.idle_voltage == 14.3
@@ -227,12 +236,89 @@ def test_the_reference_follows_a_slowly_draining_battery() -> None:
     estimator = CompressorEstimator()
     feed(estimator, [128, 128])
 
-    readings = [127] * (IDLE_SETTLE_SECONDS // STEP + 2)
+    readings = [127] * (BASELINE_SECONDS // STEP + 2)
     assert not any(feed(estimator, readings, start=60))
     assert estimator.idle_voltage == 12.7
 
     # Without that, this second tenth would have looked like a compressor run.
     assert feed(estimator, [126], start=60 + len(readings) * STEP) == [False]
+
+
+def cycle(idle: int, running: int, cold: int) -> tuple[list[int], list[int]]:
+    """Return the voltages and temperatures of one 50 minute cycle.
+
+    13 minutes running while it cools down by two degrees, then 37 minutes
+    idle while it warms up again.
+    """
+    voltages = [running] * 26 + [idle] * 74
+    temperatures = [cold + 2] * 9 + [cold + 1] * 9 + [cold] * 33 + [cold + 1] * 25
+    temperatures += [cold + 2] * (100 - len(temperatures))
+    return voltages, temperatures
+
+
+def test_an_idle_level_that_settles_lower_is_followed() -> None:
+    """Seen on 12 Oct: the fridge idled at 14.1 V instead of 14.3 V for hours.
+
+    With a fixed reference the compressor showed as running all that time,
+    while the temperature kept cycling normally.
+    """
+    estimator = CompressorEstimator()
+    voltages, temperatures = cycle(143, 141, 4)
+    feed(estimator, voltages, temperatures=temperatures)
+    assert estimator.idle_voltage == 14.3
+
+    # From now on it idles at 14.1 V and runs at 14.0 V.
+    voltages, temperatures = cycle(141, 140, 4)
+    cycles = [
+        feed(estimator, voltages, start=n * 100 * STEP, temperatures=temperatures)
+        for n in range(1, 5)
+    ]
+
+    # Within the hour the idle phases read idle again...
+    assert not any(cycles[2][26:])
+    assert not any(cycles[3][26:])
+    # ...and a run, one tenth down while the temperature falls, still shows.
+    assert any(cycles[3][:26])
+    assert estimator.idle_voltage == 14.1
+
+
+def test_getting_warmer_ends_a_run() -> None:
+    """Seen on 12 Oct: after a run the voltage stayed at 14.1 V, two tenths low.
+
+    Once the fridge warms up again the compressor is clearly off, so 14.1 V
+    is idle from then on.
+    """
+    estimator = CompressorEstimator()
+    feed(estimator, [143, 143], temperatures=[6, 6])
+
+    # It runs for ten minutes and cools down, then stops at 14.1 V.
+    temperatures = [6] * 10 + [5] * 10 + [4] * 20
+    run = feed(estimator, [140] + [141] * 39, start=60, temperatures=temperatures)
+    assert all(run)
+
+    after = feed(estimator, [141, 141], start=1260, temperatures=[5, 5])
+    assert after == [False, False]
+    assert estimator.idle_voltage == 14.1
+
+
+def test_getting_warmer_right_at_the_start_does_not_end_the_run() -> None:
+    """The reading that made the fridge start its compressor can come a poll late."""
+    estimator = CompressorEstimator()
+    feed(estimator, [143, 143], temperatures=[5, 5])
+
+    run = feed(estimator, [140, 140, 141], start=60, temperatures=[5, 6, 6])
+    assert run == [True] * 3
+    assert estimator.idle_voltage == 14.3
+
+
+def test_one_tenth_down_counts_while_the_temperature_falls() -> None:
+    """The temperature tells a small dip from noise."""
+    estimator = CompressorEstimator()
+    feed(estimator, [141, 141], temperatures=[6, 6])
+
+    assert feed(estimator, [140], start=60, temperatures=[6]) == [False]
+    assert feed(estimator, [140], start=90, temperatures=[5]) == [True]
+    assert feed(estimator, [141], start=120, temperatures=[5]) == [False]
 
 
 def test_reset_forgets_the_supply() -> None:

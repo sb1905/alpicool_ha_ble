@@ -285,6 +285,7 @@ class FridgeApi:
             status["bat_vol_int"] * 10 + status["bat_vol_dec"],
             powered_on=bool(status["powered_on"]),
             satisfied=satisfied,
+            temperatures=tuple(status[f"{zone}_current"] for zone in zones),
         )
 
     def _notification_handler(self, sender, data: bytearray):
