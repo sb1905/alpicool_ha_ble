@@ -36,6 +36,7 @@ The additions in this fork were built with support from [Claude](https://claude.
 * **Sensor:** Separate `sensor` entities for diagnostic data:
     * Battery charge percentage.
     * Battery voltage.
+    * Last update: when the fridge last sent its status. If that is more than 150 seconds ago, the other entities go unavailable and the connection is rebuilt.
 * **Switch:** `switch` entities for:
     * **Power:** switches the fridge on and off with one press.
     * **Eco:** on is `Eco`, off is `Max`. One press switches between them.

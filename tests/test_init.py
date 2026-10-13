@@ -1,5 +1,6 @@
 """Setup tests driving the real protocol code against a simulated fridge."""
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_fire_time_changed,
     mock_restore_cache,
 )
 
@@ -23,6 +25,8 @@ from custom_components.alpicool_ble.const import (
     CONF_LEFT_NAME,
     DOMAIN,
     FRIDGE_RW_CHARACTERISTIC_UUID,
+    POLL_INTERVAL,
+    STALE_AFTER,
     Request,
 )
 
@@ -649,3 +653,40 @@ async def test_existing_single_zone_keeps_its_entity_id(
 
     assert hass.states.get("climate.fridge_left") is not None
     assert hass.states.get("climate.fridge") is None
+
+
+async def test_a_silent_fridge_is_reconnected(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """A connection that stops delivering status is dropped and opened afresh."""
+    entry = await setup_entry(hass, fake_fridge)
+    api = hass.data[DOMAIN][entry.entry_id]
+    first_update = api.last_update
+    assert hass.states.get("sensor.fridge_last_update").state == (
+        first_update.isoformat(timespec="seconds")
+    )
+
+    # The fridge has gone quiet without the connection being dropped.
+    api._last_successful_update_time -= STALE_AFTER + 1
+    fresh = FakeFridge()
+    with (
+        patch.object(
+            api_module.bluetooth,
+            "async_ble_device_from_address",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            api_module, "establish_connection", AsyncMock(return_value=fresh)
+        ),
+    ):
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=POLL_INTERVAL)
+        )
+        async with asyncio.timeout(5):
+            while not fresh.received or not api.is_available:
+                await asyncio.sleep(0.01)
+        await hass.async_block_till_done()
+
+    assert fake_fridge.is_connected is False
+    assert hass.states.get("climate.fridge").state == "cool"
+    assert api.last_update > first_update

@@ -1,5 +1,8 @@
 """The Alpicool BLE integration."""
 
+import asyncio
+from datetime import datetime, timedelta
+
 from bleak.exc import BleakError
 
 from homeassistant.config_entries import ConfigEntry
@@ -8,9 +11,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import FridgeApi
-from .const import CONF_BIND_ON_START, DEFAULT_BIND_ON_START, DOMAIN
+from .const import CONF_BIND_ON_START, DEFAULT_BIND_ON_START, DOMAIN, POLL_INTERVAL
 from .entity import get_option
 
 PLATFORMS: list[Platform] = [
@@ -91,12 +95,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _async_remove_retired_entities(hass, address)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    entry.async_create_background_task(
-        hass,
-        api.start_polling(
-            lambda: async_dispatcher_send(hass, f"{DOMAIN}_{address}_update")
-        ),
-        name="alpicool_ble_poll",
+    @callback
+    def _async_send_update() -> None:
+        async_dispatcher_send(hass, f"{DOMAIN}_{address}_update")
+
+    @callback
+    def _async_start_polling() -> asyncio.Task:
+        return entry.async_create_background_task(
+            hass, api.start_polling(_async_send_update), name="alpicool_ble_poll"
+        )
+
+    poll_task = _async_start_polling()
+
+    async def _async_reconnect() -> None:
+        """Drop the connection and start polling afresh."""
+        nonlocal poll_task
+        poll_task.cancel()
+        await api.disconnect()
+        poll_task = _async_start_polling()
+
+    @callback
+    def _async_watchdog(now: datetime) -> None:
+        """Catch a connection that went quiet without being dropped."""
+        if api.async_check_stale():
+            _async_send_update()
+            entry.async_create_background_task(
+                hass, _async_reconnect(), name="alpicool_ble_reconnect"
+            )
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _async_watchdog, timedelta(seconds=POLL_INTERVAL)
+        )
     )
 
     return True

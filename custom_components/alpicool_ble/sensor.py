@@ -1,6 +1,7 @@
 """Sensor platform for the Alpicool BLE integration."""
 
 from collections.abc import Callable
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -52,6 +53,7 @@ async def async_setup_entry(
         AlpicoolSensor(entry, api, sensor_key, sensor_def)
         for sensor_key, sensor_def in SENSORS.items()
     ]
+    entities.append(AlpicoolLastUpdateSensor(entry, api))
     async_add_entities(entities)
 
 
@@ -84,3 +86,29 @@ class AlpicoolSensor(AlpicoolEntity, SensorEntity):
 
         value_fn: Callable = self._sensor_def["value_fn"]
         return value_fn(self.api.status)
+
+
+class AlpicoolLastUpdateSensor(AlpicoolEntity, SensorEntity):
+    """When the fridge last sent its status.
+
+    It stays readable while the fridge is unavailable, to show since when.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, entry: ConfigEntry, api: FridgeApi) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, api)
+        self._attr_unique_id = f"{self._address}_last_update"
+        self._attr_name = "Last Update"
+
+    @property
+    def available(self) -> bool:
+        """Return True once the fridge has sent a status at all."""
+        return self.api.last_update is not None
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the time of the last status."""
+        return self.api.last_update

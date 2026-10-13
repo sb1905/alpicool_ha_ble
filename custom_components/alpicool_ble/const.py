@@ -23,8 +23,11 @@ POLL_INTERVAL = 30
 RECONNECT_BACKOFF = 10
 # Longest pause between connection attempts. A new advertisement cuts it short.
 RECONNECT_INTERVAL = 60
-# After this long without a successful status update the device goes unavailable.
-UNAVAILABLE_AFTER = 300
+# After this long without a status message from the fridge its entities go
+# unavailable and the connection is rebuilt. Five polls missed in a row.
+STALE_AFTER = 150
+# Longest wait for the connection to close before it is given up on.
+DISCONNECT_TIMEOUT = 10
 
 # Value of the "unit" status byte when the fridge is set to Fahrenheit (0 is Celsius).
 UNIT_FAHRENHEIT = 1

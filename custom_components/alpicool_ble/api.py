@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 import logging
+from datetime import datetime
 import time
 
 from bleak import BleakClient
@@ -13,16 +14,18 @@ from bleak_retry_connector import establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import BluetoothCallbackMatcher
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 
 from .compressor import CompressorEstimator
 from .const import (
     DEFAULT_MAX_WRITE_SIZE,
+    DISCONNECT_TIMEOUT,
     FRIDGE_NOTIFY_UUID,
     FRIDGE_RW_CHARACTERISTIC_UUID,
     POLL_INTERVAL,
     RECONNECT_BACKOFF,
     RECONNECT_INTERVAL,
-    UNAVAILABLE_AFTER,
+    STALE_AFTER,
     UNIT_FAHRENHEIT,
     WRITE_CHUNK_DELAY,
     Request,
@@ -101,6 +104,8 @@ class FridgeApi:
         self._notification_buffer = bytearray()
         self.is_available: bool = True
         self._last_successful_update_time: float = 0.0
+        # When the fridge last sent its status, for the "Last Update" sensor.
+        self.last_update: datetime | None = None
         # The fridge does not say whether its compressor runs; this works it
         # out from the dip in the supply voltage.
         self.compressor = CompressorEstimator()
@@ -262,6 +267,7 @@ class FridgeApi:
                 }
                 self.status.update(extra_unknown_status)
 
+            self.last_update = dt_util.utcnow()
             self._update_compressor()
             _LOGGER.debug("Decoded status: %s", self.status)
         except IndexError as e:
@@ -527,7 +533,37 @@ class FridgeApi:
         """Disconnect from the fridge."""
         client, self._client = self._client, None
         if client and client.is_connected:
-            await client.disconnect()
+            try:
+                async with asyncio.timeout(DISCONNECT_TIMEOUT):
+                    await client.disconnect()
+            except TimeoutError:
+                _LOGGER.debug("Disconnecting from %s timed out", self._address)
+
+    @callback
+    def async_check_stale(self) -> bool:
+        """Mark the fridge unavailable once its status has stopped coming.
+
+        This runs on its own timer, not in the polling loop, because a stalled
+        connection can leave the loop waiting forever. Returns True when the
+        fridge has just gone stale and the connection should be rebuilt.
+        """
+        if not self.is_available:
+            return False
+        silence = (
+            asyncio.get_running_loop().time() - self._last_successful_update_time
+        )
+        if silence <= STALE_AFTER:
+            return False
+        _LOGGER.warning(
+            "No status from %s for %d seconds, marking it unavailable and "
+            "reconnecting",
+            self._address,
+            silence,
+        )
+        self.is_available = False
+        self.status.clear()
+        self.compressor.reset()
+        return True
 
     def _max_write_size(self) -> int:
         """Return the largest payload the current connection accepts in one write."""
@@ -611,19 +647,6 @@ class FridgeApi:
                     if not self.is_available:
                         _LOGGER.debug("Device communication restored")
                         self.is_available = True
-                time_since_success = (
-                    asyncio.get_running_loop().time()
-                    - self._last_successful_update_time
-                )
-                if time_since_success > UNAVAILABLE_AFTER and self.is_available:
-                    _LOGGER.debug(
-                        "Device has been unreachable for over %s seconds. "
-                        "Marking as unavailable",
-                        UNAVAILABLE_AFTER,
-                    )
-                    self.is_available = False
-                    self.status.clear()
-                    self.compressor.reset()
                 update_callback()
 
                 # --- Sleep ---

@@ -10,6 +10,7 @@ from custom_components.alpicool_ble import api as api_module
 from custom_components.alpicool_ble.api import FridgeApi
 from custom_components.alpicool_ble.const import (
     FRIDGE_RW_CHARACTERISTIC_UUID,
+    STALE_AFTER,
     Request,
 )
 
@@ -563,3 +564,55 @@ async def test_disconnect_drops_the_client(fridge: FridgeApi) -> None:
     client.disconnect.assert_awaited_once()
     assert fridge._client is None
     assert fridge.is_connected is False
+
+
+async def test_a_hanging_disconnect_is_given_up_on(
+    fridge: FridgeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stalled connection must not block the reconnect forever."""
+    monkeypatch.setattr(api_module, "DISCONNECT_TIMEOUT", 0.01)
+
+    async def hang() -> None:
+        await asyncio.sleep(10)
+
+    client = MagicMock()
+    client.is_connected = True
+    client.disconnect = hang
+    fridge._client = client
+
+    await fridge.disconnect()
+
+    assert fridge._client is None
+
+
+# --- Staleness --------------------------------------------------------------
+
+
+async def test_a_silent_fridge_goes_stale(fridge: FridgeApi) -> None:
+    """No status for too long: unavailable, and the old values are dropped."""
+    fridge._decode_status(SINGLE_ZONE_PAYLOAD)
+    last_update = fridge.last_update
+    assert last_update is not None
+    fridge._last_successful_update_time = (
+        asyncio.get_running_loop().time() - STALE_AFTER - 1
+    )
+
+    assert fridge.async_check_stale() is True
+    assert fridge.is_available is False
+    assert fridge.status == {}
+    assert fridge.compressor.idle_voltage is None
+    # When it last answered stays known.
+    assert fridge.last_update == last_update
+
+    # Reported once, so the connection is not rebuilt over and over.
+    assert fridge.async_check_stale() is False
+
+
+async def test_a_fridge_that_answers_is_not_stale(fridge: FridgeApi) -> None:
+    """A recent status keeps the fridge available."""
+    fridge._decode_status(SINGLE_ZONE_PAYLOAD)
+    fridge._last_successful_update_time = asyncio.get_running_loop().time() - 60
+
+    assert fridge.async_check_stale() is False
+    assert fridge.is_available is True
+    assert fridge.status
