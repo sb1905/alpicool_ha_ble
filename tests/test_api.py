@@ -9,6 +9,7 @@ import pytest
 from custom_components.alpicool_ble import api as api_module
 from custom_components.alpicool_ble.api import FridgeApi
 from custom_components.alpicool_ble.const import (
+    DEFAULT_MAX_WRITE_SIZE,
     FRIDGE_RW_CHARACTERISTIC_UUID,
     STALE_AFTER,
     Request,
@@ -360,6 +361,53 @@ async def test_connect_uses_establish_connection_with_a_fresh_device(
     assert fridge._client is client
     assert fridge._write_requires_response is False
     client.start_notify.assert_awaited_once()
+
+
+class FakeBlueZBackend:
+    """Stand-in for bleak's BlueZ backend, which warns until the MTU is acquired."""
+
+    def __init__(self, mtu: int | None = 247, error: Exception | None = None) -> None:
+        """Remember what _acquire_mtu() should do."""
+        self._mtu_size: int | None = None
+        self._mtu = mtu
+        self._error = error
+        self.acquire_calls = 0
+
+    async def _acquire_mtu(self) -> None:
+        """Pretend to ask BlueZ for the MTU."""
+        self.acquire_calls += 1
+        if self._error is not None:
+            raise self._error
+        self._mtu_size = self._mtu
+
+
+async def test_bluez_mtu_is_acquired_once(fridge: FridgeApi) -> None:
+    """The BlueZ MTU is fetched after connecting, and only once per connection."""
+    backend = FakeBlueZBackend(mtu=247)
+    fridge._client = MagicMock(_backend=backend)
+
+    await fridge._async_acquire_mtu()
+    await fridge._async_acquire_mtu()
+
+    assert backend.acquire_calls == 1
+    assert backend._mtu_size == 247
+
+
+async def test_failed_mtu_acquire_pins_the_default(fridge: FridgeApi) -> None:
+    """If BlueZ refuses, the default MTU is pinned so later reads don't warn."""
+    backend = FakeBlueZBackend(error=RuntimeError("org.bluez.Error.NotPermitted"))
+    fridge._client = MagicMock(_backend=backend)
+
+    await fridge._async_acquire_mtu()
+
+    assert backend._mtu_size == DEFAULT_MAX_WRITE_SIZE + 3
+
+
+async def test_mtu_acquire_skips_backends_without_it(fridge: FridgeApi) -> None:
+    """ESPHome proxies and other backends have no _acquire_mtu() to call."""
+    fridge._client = MagicMock(_backend=object())
+
+    await fridge._async_acquire_mtu()
 
 
 def _connected_client() -> MagicMock:

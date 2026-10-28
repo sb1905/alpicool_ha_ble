@@ -454,6 +454,8 @@ class FridgeApi:
         if not await self._async_establish_connection():
             return False
 
+        await self._async_acquire_mtu()
+
         try:
             _LOGGER.debug("Discovering services and characteristics")
             write_char = None
@@ -564,6 +566,27 @@ class FridgeApi:
         self.status.clear()
         self.compressor.reset()
         return True
+
+    async def _async_acquire_mtu(self) -> None:
+        """Ask BlueZ for the negotiated MTU before anything reads mtu_size.
+
+        Only the local BlueZ backend needs this: it reports a default MTU and
+        warns on every read until _acquire_mtu() has run. ESPHome proxies and
+        other backends already know their MTU.
+        """
+        backend = getattr(self._client, "_backend", None)
+        acquire = getattr(backend, "_acquire_mtu", None)
+        if acquire is None or getattr(backend, "_mtu_size", 0) is not None:
+            return
+        try:
+            await acquire()
+        except Exception as e:  # noqa: BLE001 - any failure just means "use the default"
+            _LOGGER.debug("Could not acquire the MTU, using the default: %s", e)
+            # Pin the default bleak would fall back to anyway, so reading
+            # mtu_size later doesn't warn on every write.
+            backend._mtu_size = DEFAULT_MAX_WRITE_SIZE + 3
+        else:
+            _LOGGER.debug("Negotiated MTU is %s", backend._mtu_size)
 
     def _max_write_size(self) -> int:
         """Return the largest payload the current connection accepts in one write."""
