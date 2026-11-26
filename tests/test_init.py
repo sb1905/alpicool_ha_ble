@@ -690,3 +690,24 @@ async def test_a_silent_fridge_is_reconnected(
     assert fake_fridge.is_connected is False
     assert hass.states.get("climate.fridge").state == "cool"
     assert api.last_update > first_update
+
+
+async def test_connection_switch_releases_the_fridge(
+    hass: HomeAssistant, enable_bluetooth: None, fake_fridge: FakeFridge
+) -> None:
+    """Switched off, the fridge is disconnected and its entities unavailable;
+    the switch itself stays usable."""
+    await setup_entry(hass, fake_fridge)
+    assert hass.states.get("switch.fridge_bluetooth_connection").state == "on"
+
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": "switch.fridge_bluetooth_connection"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert fake_fridge.is_connected is False
+    assert hass.states.get("switch.fridge_bluetooth_connection").state == "off"
+    assert hass.states.get("climate.fridge").state == "unavailable"

@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import FridgeApi, has_right_zone
@@ -25,6 +26,7 @@ async def async_setup_entry(
             AlpicoolPowerSwitch(entry, api),
             AlpicoolEcoSwitch(entry, api),
             AlpicoolLockSwitch(entry, api),
+            AlpicoolConnectionSwitch(entry, api),
         ]
     )
 
@@ -150,3 +152,51 @@ class AlpicoolLockSwitch(AlpicoolEntity, SwitchEntity):
         await self.api.async_set_values({"locked": False})
         await self._async_refresh_after_write()
 
+
+
+class AlpicoolConnectionSwitch(AlpicoolEntity, SwitchEntity):
+    """Hold the Bluetooth connection, or release it for the fridge's own app.
+
+    The fridge accepts one connection at a time, so the vendor app cannot
+    connect while Home Assistant holds it. Off releases it without disabling
+    the integration; Home Assistant takes it back when switched on again, after
+    RELEASE_DURATION, or on its next restart.
+    """
+
+    _attr_device_class = SwitchDeviceClass.SWITCH
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, entry: ConfigEntry, api: FridgeApi) -> None:
+        """Initialize the switch."""
+        super().__init__(entry, api)
+        self._attr_unique_id = f"{self._address}_connection"
+        self._attr_name = "Bluetooth Connection"
+
+    @property
+    def available(self) -> bool:
+        """Stay usable while the fridge is unavailable, or it could not be resumed."""
+        return True
+
+    @property
+    def is_on(self) -> bool:
+        """Return true while Home Assistant holds the connection."""
+        return not self.api.is_released
+
+    @property
+    def icon(self) -> str:
+        """Return a Bluetooth icon, crossed out while released."""
+        return "mdi:bluetooth-connect" if self.is_on else "mdi:bluetooth-off"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Take the connection back."""
+        self.api.async_resume()
+        self._async_notify()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Release the connection for the fridge's own app."""
+        await self.api.async_release()
+        self._async_notify()
+
+    def _async_notify(self) -> None:
+        """Update every entity of the fridge, which all change availability."""
+        async_dispatcher_send(self.hass, f"{DOMAIN}_{self._address}_update")

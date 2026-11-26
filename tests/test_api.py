@@ -1,6 +1,7 @@
 """Tests for the Alpicool BLE protocol and connection handling."""
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from bleak.exc import BleakError
@@ -735,3 +736,83 @@ async def test_a_fridge_that_answers_is_not_stale(fridge: FridgeApi) -> None:
     assert fridge.async_check_stale() is False
     assert fridge.is_available is True
     assert fridge.status
+
+
+# --- Releasing the connection ---------------------------------------------
+
+
+async def test_release_disconnects_and_pauses_polling(
+    fridge: FridgeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Released, the loop neither reconnects nor polls until resumed."""
+    client = MagicMock()
+    client.is_connected = True
+    client.disconnect = AsyncMock()
+    fridge._client = client
+    fridge.status = {"left_current": 4}
+    connect = AsyncMock(return_value=False)
+    monkeypatch.setattr(fridge, "connect", connect)
+    async def _pause() -> None:
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(fridge, "_async_wait_for_advertisement", _pause)
+
+    await fridge.async_release()
+
+    assert fridge.is_released
+    assert not fridge.is_available
+    assert fridge.status == {}
+    assert fridge._client is None
+    client.disconnect.assert_awaited_once()
+
+    updates = MagicMock()
+    loop = asyncio.create_task(fridge.start_polling(updates))
+    await asyncio.sleep(0.05)
+    connect.assert_not_called()
+    assert updates.call_count == 1
+
+    fridge.async_resume()
+    await asyncio.sleep(0.05)
+    loop.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await loop
+
+    assert not fridge.is_released
+    connect.assert_awaited()
+
+
+async def test_release_ends_by_itself(
+    fridge: FridgeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After RELEASE_DURATION Home Assistant takes the connection back."""
+    monkeypatch.setattr(api_module, "RELEASE_DURATION", 0.05)
+    await fridge.async_release()
+
+    await asyncio.wait_for(fridge._async_wait_while_released(MagicMock()), 1)
+
+    assert not fridge.is_released
+
+
+async def test_released_fridge_is_not_reported_stale(fridge: FridgeApi) -> None:
+    """The watchdog must not rebuild a connection that was handed over."""
+    fridge.set_initial_timestamp()
+    await fridge.async_release()
+    fridge._last_successful_update_time -= STALE_AFTER + 1
+
+    assert fridge.async_check_stale() is False
+
+
+async def test_wait_while_released_drops_a_late_connection(
+    fridge: FridgeApi,
+) -> None:
+    """A connection attempt that finished after the release is closed again."""
+    await fridge.async_release()
+    client = MagicMock()
+    client.is_connected = True
+    client.disconnect = AsyncMock()
+    fridge._client = client
+    fridge.async_resume()
+
+    await fridge._async_wait_while_released(MagicMock())
+
+    client.disconnect.assert_awaited_once()

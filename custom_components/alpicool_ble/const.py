@@ -28,6 +28,10 @@ RECONNECT_INTERVAL = 60
 STALE_AFTER = 150
 # Longest wait for the connection to close before it is given up on.
 DISCONNECT_TIMEOUT = 10
+# After the connection is released for the fridge's own app, Home Assistant
+# takes it back after this long, so monitoring cannot stay off by mistake. The
+# fridge accepts one connection at a time, so this cannot interrupt the app.
+RELEASE_DURATION = 30 * 60
 
 # Value of the "unit" status byte when the fridge is set to Fahrenheit (0 is Celsius).
 UNIT_FAHRENHEIT = 1

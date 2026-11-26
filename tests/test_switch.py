@@ -1,12 +1,13 @@
 """Tests for the Alpicool switch entities."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.alpicool_ble.const import CONF_DUAL_ZONE_MODES, DOMAIN
 from custom_components.alpicool_ble.switch import (
+    AlpicoolConnectionSwitch,
     AlpicoolLockSwitch,
     AlpicoolEcoSwitch,
     AlpicoolPowerSwitch,
@@ -44,6 +45,7 @@ async def test_setup_adds_power_mode_and_lock() -> None:
         f"{ADDRESS}_power",
         f"{ADDRESS}_mode",
         f"{ADDRESS}_lock",
+        f"{ADDRESS}_connection",
     ]
 
 
@@ -152,3 +154,44 @@ def test_eco_icon_follows_the_mode() -> None:
     entry = _entry()
     assert AlpicoolEcoSwitch(entry, _api(run_mode=1)).icon == "mdi:leaf"
     assert AlpicoolEcoSwitch(entry, _api(run_mode=0)).icon == "mdi:speedometer"
+
+
+# --- Bluetooth connection --------------------------------------------------
+
+
+def _connection_switch(api: MagicMock) -> AlpicoolConnectionSwitch:
+    switch = AlpicoolConnectionSwitch(_entry(), api)
+    switch.hass = MagicMock()
+    return switch
+
+
+def test_connection_switch_stays_available_while_released() -> None:
+    """Otherwise it could not be switched back on."""
+    api = _api()
+    api.is_available = False
+    api.is_released = True
+    switch = _connection_switch(api)
+
+    assert switch.available is True
+    assert switch.is_on is False
+    assert switch.unique_id == f"{ADDRESS}_connection"
+
+
+async def test_connection_switch_releases_and_resumes() -> None:
+    """Off releases the connection, on takes it back; all entities refresh."""
+    api = _api()
+    api.is_released = False
+    api.async_release = AsyncMock()
+    api.async_resume = MagicMock()
+    switch = _connection_switch(api)
+
+    with patch(
+        "custom_components.alpicool_ble.switch.async_dispatcher_send"
+    ) as send:
+        await switch.async_turn_off()
+        api.async_release.assert_awaited_once()
+        await switch.async_turn_on()
+        api.async_resume.assert_called_once()
+
+    assert send.call_count == 2
+    assert send.call_args.args[1] == f"alpicool_ble_{ADDRESS}_update"

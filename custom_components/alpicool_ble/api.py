@@ -25,6 +25,7 @@ from .const import (
     POLL_INTERVAL,
     RECONNECT_BACKOFF,
     RECONNECT_INTERVAL,
+    RELEASE_DURATION,
     STALE_AFTER,
     UNIT_FAHRENHEIT,
     WRITE_CHUNK_DELAY,
@@ -115,6 +116,9 @@ class FridgeApi:
         # The fridge does not say whether its compressor runs; this works it
         # out from the dip in the supply voltage.
         self.compressor = CompressorEstimator()
+        # True while the connection is handed over to the fridge's own app.
+        self.is_released: bool = False
+        self._resume_event = asyncio.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -677,6 +681,48 @@ class FridgeApi:
         else:
             return True
 
+    async def async_release(self) -> None:
+        """Hand the connection over to the fridge's own app.
+
+        The fridge accepts one connection at a time. Polling pauses until
+        async_resume() is called or RELEASE_DURATION has passed.
+        """
+        _LOGGER.debug("Releasing the connection to %s", self._address)
+        self.is_released = True
+        self._resume_event.clear()
+        # Its values would only go stale, and the watchdog ignores an
+        # unavailable fridge.
+        self.is_available = False
+        self.status.clear()
+        self.compressor.reset()
+        await self.disconnect()
+
+    @callback
+    def async_resume(self) -> None:
+        """Take the connection back; the polling loop reconnects right away."""
+        _LOGGER.debug("Taking the connection to %s back", self._address)
+        self.is_released = False
+        self._resume_event.set()
+
+    async def _async_wait_while_released(self, update_callback) -> None:
+        """Stay disconnected until resumed, or until RELEASE_DURATION is up."""
+        # A connection attempt that was running when it was released may
+        # have completed since.
+        await self.disconnect()
+        update_callback()
+        try:
+            async with asyncio.timeout(RELEASE_DURATION):
+                await self._resume_event.wait()
+        except TimeoutError:
+            _LOGGER.debug(
+                "Connection to %s released for %d seconds, taking it back",
+                self._address,
+                RELEASE_DURATION,
+            )
+        self.is_released = False
+        self._last_successful_update_time = asyncio.get_running_loop().time()
+        update_callback()
+
     async def start_polling(self, update_callback):
         """Start polling for status updates in the background."""
         _LOGGER.debug("Starting background polling")
@@ -684,6 +730,9 @@ class FridgeApi:
             self._last_successful_update_time = asyncio.get_running_loop().time()
         while True:
             try:
+                if self.is_released:
+                    await self._async_wait_while_released(update_callback)
+                    continue
                 if not self.is_connected:
                     _LOGGER.debug("Device disconnected, attempting to reconnect")
                     if await self.connect(is_reconnect=True):

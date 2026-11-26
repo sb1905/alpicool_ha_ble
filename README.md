@@ -41,6 +41,7 @@ The additions in this fork were built with support from [Claude](https://claude.
     * **Power:** switches the fridge on and off with one press.
     * **Eco:** on is `Eco`, off is `Max`. One press switches between them.
     * **Panel Lock:** locks the buttons on the fridge's own control panel.
+    * **Bluetooth Connection:** the fridge accepts only one Bluetooth connection at a time. Switch this off to let the fridge's own app connect, without disabling the integration. The other entities are unavailable meanwhile. Home Assistant takes the connection back when you switch it on again, after 30 minutes, or when it restarts. While the app is still connected, Home Assistant keeps retrying until the app lets go.
 * **Number:** `number` entities to configure advanced settings directly from the UI:
     * Compressor start delay (in minutes).
     * Temperature hysteresis (return difference).
