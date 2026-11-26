@@ -100,6 +100,12 @@ class FridgeApi:
         # reconnects is what kept the fridge unreachable until a reload.
         self._client: BleakClient | None = None
         self._write_requires_response = False
+        # The characteristics actually used, resolved per connection. Some
+        # fridges (e.g. A1-… units advertising 0xAF30) expose the 0x1234
+        # service twice, so 0x1235/0x1236 are not unique and bleak refuses to
+        # look them up by UUID string.
+        self._write_char = None
+        self._notify_char = None
         # Buffer for reassembling fragmented packets
         self._notification_buffer = bytearray()
         self.is_available: bool = True
@@ -459,12 +465,24 @@ class FridgeApi:
         try:
             _LOGGER.debug("Discovering services and characteristics")
             write_char = None
+            notify_char = None
             for service in self._client.services:
                 for char in service.characteristics:
                     if char.uuid.lower() == FRIDGE_RW_CHARACTERISTIC_UUID.lower():
                         write_char = char
                         break
                 if write_char:
+                    # Take the notify characteristic from the same service,
+                    # so a duplicated service cannot pair it with a stray one.
+                    notify_char = next(
+                        (
+                            c
+                            for c in service.characteristics
+                            if c.uuid.lower() == FRIDGE_NOTIFY_UUID.lower()
+                            and "notify" in c.properties
+                        ),
+                        None,
+                    )
                     break
 
             if not write_char:
@@ -497,8 +515,17 @@ class FridgeApi:
                 await self.disconnect()
                 return False
 
+            if not notify_char:
+                _LOGGER.error(
+                    "Notify characteristic %s not found!", FRIDGE_NOTIFY_UUID
+                )
+                await self.disconnect()
+                return False
+
+            self._write_char = write_char
+            self._notify_char = notify_char
             await self._client.start_notify(
-                FRIDGE_NOTIFY_UUID, self._notification_handler
+                notify_char, self._notification_handler
             )
 
         except BleakError as e:
@@ -625,7 +652,7 @@ class FridgeApi:
                 if index:
                     await asyncio.sleep(WRITE_CHUNK_DELAY)
                 await self._client.write_gatt_char(
-                    FRIDGE_RW_CHARACTERISTIC_UUID,
+                    self._write_char or FRIDGE_RW_CHARACTERISTIC_UUID,
                     chunk,
                     response=self._write_requires_response,
                 )
