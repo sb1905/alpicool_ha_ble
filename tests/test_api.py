@@ -10,6 +10,7 @@ from custom_components.alpicool_ble import api as api_module
 from custom_components.alpicool_ble.api import FridgeApi
 from custom_components.alpicool_ble.const import (
     DEFAULT_MAX_WRITE_SIZE,
+    FRIDGE_NOTIFY_UUID,
     FRIDGE_RW_CHARACTERISTIC_UUID,
     STALE_AFTER,
     Request,
@@ -547,6 +548,76 @@ async def test_connect_prefers_write_with_response_when_both_offered(
         assert await fridge.connect(is_reconnect=True) is True
 
     assert fridge._write_requires_response is True
+
+
+def _char(uuid: str, *properties: str) -> MagicMock:
+    """Return a characteristic mock with the given UUID and properties."""
+    char = MagicMock()
+    char.uuid = uuid
+    char.properties = list(properties)
+    return char
+
+
+async def test_connect_handles_a_duplicated_service(fridge: FridgeApi) -> None:
+    """Some fridges expose the 0x1234 service twice (PR #1). The write and
+    notify characteristics are taken from the same service and passed to bleak
+    by object, since bleak refuses an ambiguous UUID."""
+    write = _char(FRIDGE_RW_CHARACTERISTIC_UUID, "write-without-response")
+    notify = _char(FRIDGE_NOTIFY_UUID, "read", "notify")
+    first = MagicMock()
+    first.characteristics = [write, notify]
+    second = MagicMock()
+    second.characteristics = [
+        _char(FRIDGE_RW_CHARACTERISTIC_UUID, "write-without-response"),
+        _char(FRIDGE_NOTIFY_UUID, "notify"),
+        _char(FRIDGE_NOTIFY_UUID, "read"),
+    ]
+    client = MagicMock()
+    client.is_connected = True
+    client.start_notify = AsyncMock()
+    client.write_gatt_char = AsyncMock()
+    client.disconnect = AsyncMock()
+    client.services = [first, second]
+
+    with (
+        patch.object(
+            api_module.bluetooth,
+            "async_ble_device_from_address",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            api_module, "establish_connection", AsyncMock(return_value=client)
+        ),
+    ):
+        assert await fridge.connect(is_reconnect=True) is True
+
+    assert client.start_notify.await_args.args[0] is notify
+    await fridge._send_raw(b"\xfe\xfe\x03\x01\x02\x00")
+    assert client.write_gatt_char.await_args.args[0] is write
+
+    await fridge.disconnect()
+    assert fridge._write_char is None
+    assert fridge._notify_char is None
+
+
+async def test_connect_falls_back_to_the_notify_uuid(fridge: FridgeApi) -> None:
+    """Without a notify characteristic next to the write one, the notify UUID
+    is used as before, so single-service fridges are unaffected."""
+    client = _connected_client()
+
+    with (
+        patch.object(
+            api_module.bluetooth,
+            "async_ble_device_from_address",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            api_module, "establish_connection", AsyncMock(return_value=client)
+        ),
+    ):
+        assert await fridge.connect(is_reconnect=True) is True
+
+    assert client.start_notify.await_args.args[0] == FRIDGE_NOTIFY_UUID
 
 
 async def test_advertisement_wakes_the_reconnect_wait(

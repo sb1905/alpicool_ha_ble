@@ -479,7 +479,7 @@ class FridgeApi:
                             c
                             for c in service.characteristics
                             if c.uuid.lower() == FRIDGE_NOTIFY_UUID.lower()
-                            and "notify" in c.properties
+                            and {"notify", "indicate"} & set(c.properties)
                         ),
                         None,
                     )
@@ -516,16 +516,17 @@ class FridgeApi:
                 return False
 
             if not notify_char:
-                _LOGGER.error(
-                    "Notify characteristic %s not found!", FRIDGE_NOTIFY_UUID
+                # Look it up by UUID as before, so a fridge whose notify
+                # characteristic sits in another service still connects.
+                _LOGGER.debug(
+                    "No notify characteristic next to the write one; using %s",
+                    FRIDGE_NOTIFY_UUID,
                 )
-                await self.disconnect()
-                return False
 
             self._write_char = write_char
             self._notify_char = notify_char
             await self._client.start_notify(
-                notify_char, self._notification_handler
+                notify_char or FRIDGE_NOTIFY_UUID, self._notification_handler
             )
 
         except BleakError as e:
@@ -561,6 +562,9 @@ class FridgeApi:
     async def disconnect(self):
         """Disconnect from the fridge."""
         client, self._client = self._client, None
+        # The characteristics belong to that connection; never reuse them.
+        self._write_char = None
+        self._notify_char = None
         if client and client.is_connected:
             try:
                 async with asyncio.timeout(DISCONNECT_TIMEOUT):
