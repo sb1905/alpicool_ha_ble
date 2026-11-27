@@ -4,14 +4,17 @@ This is a Home Assistant Custom Component to control Alpicool, BrassMonkey, Ocea
 
 This integration creates multiple entities in Home Assistant, allowing you to monitor and control all known aspects of your fridge.
 
-## About this fork
+## About this integration
 
-This is [sb1905](https://github.com/sb1905)'s fork of [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble). On top of the original it adds:
+This integration is maintained by [sb1905](https://github.com/sb1905). It started as a fork of [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble) and is now developed on its own. On top of the original it adds:
 
 * A fix for single-zone fridges that report an empty second zone (Alpicool CX, advertised as `AK1-…`). Without it only the target temperature can be set, while power, mode and lock are ignored.
 * A **Power** switch and a one-press **Eco** switch.
 * A **compressor indicator**: the thermostat shows `Cooling` or `Idle`, and there is a `Compressor` sensor. The fridge does not report this, so it is estimated from the dip in the supply voltage while the compressor runs.
 * Plainer wording: a running fridge shows as `On` instead of `Cool`, and the lock is called what it is, a panel lock.
+* A connection that goes quiet is noticed and rebuilt, with a **Last Update** sensor showing when the fridge last reported.
+* Support for fridges that expose their Bluetooth service twice, such as some dual-zone `A1-…` units.
+* A **Bluetooth Connection** switch that hands the connection to the fridge's own app without disabling the integration.
 
 Versions are numbered by date, for example `2026.10.0`, so they cannot be confused with the original's `3.x` numbers.
 
@@ -19,11 +22,11 @@ Versions are numbered by date, for example `2026.10.0`, so they cannot be confus
 
 Nearly all of the code is the work of others:
 
-* [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble), the integration this fork is based on.
+* [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble), the integration this one is based on.
 * [Bascht74](https://github.com/Bascht74), whose contributions to that project include MAENTUM support, the documentation and tools, and a large part of the tests.
 * klightspeed's [BrassMonkeyFridgeMonitor](https://github.com/klightspeed/BrassMonkeyFridgeMonitor), whose protocol notes the integration builds on.
 
-The additions in this fork were built with support from [Claude](https://claude.ai), Anthropic's AI model.
+The additions to the original were built with support from [Claude](https://claude.ai), Anthropic's AI model.
 
 ## Features & Supported Entities
 
@@ -93,7 +96,7 @@ Easiest install is via [HACS](https://hacs.xyz/):
 
 ### Method 1: HACS (Recommended)
 1.  [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sb1905&repository=alpicool_ha_ble&category=integration)
-2.  Click "Download" at the bottom right. In HACS this fork is listed as "Alpicool BLE (sb1905)".
+2.  Click "Download" at the bottom right. In HACS it is listed as "Alpicool BLE (sb1905)".
 3.  Restart Home Assistant.
 
 ### Method 2: Manual Installation
